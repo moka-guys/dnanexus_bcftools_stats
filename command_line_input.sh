@@ -1,1 +1,0 @@
-sh bcftools_stats*.sh
