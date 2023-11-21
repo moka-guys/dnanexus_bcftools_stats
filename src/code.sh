@@ -3,32 +3,32 @@
 # The following line causes bash to exit at any point if there is any error
 # and to output each line as it is executed -- useful for debugging
 set -e -x -o pipefail
+#TODO move this to 001
+docker_image=seglh/bcl2fastq2:v2.20.0.422_60dbb5a
+#test if can get docker image
+docker run $docker_image
+### Set up parameters
+# split project name to get the NGS run number
+folder_to_download=${project_to_demultiplex/00[2-3]_/}
 
-dx-download-all-inputs --parallel
-# make output folder
-mkdir -p ~/out/bcftools_stats_output/QC
-# download BCFtools docker -  currently image seglh-bcftools_v1.15.1-491fe3cdb343
-Docker_file_ID=project-ByfFPz00jy1fk6PjpZ95F27J:file-GQB5qJ80jy1yF0209p0qv0ZJ
-dx download ${Docker_file_ID}
-Docker_image_file=$(dx describe ${Docker_file_ID} --name)
-Docker_image_name=$(tar xfO "${Docker_image_file}" manifest.json | sed -E 's/.*"RepoTags":\["?([^"]*)"?.*/\1/')
-#Load docker image
-docker load < /home/dnanexus/"${Docker_image_file}"
-echo "Using BCFtools docker image ${Docker_image_file}"
+API_KEY=$(echo $DX_SECURITY_CONTEXT |  jq '.auth_token' | sed 's/"//g')
 
-# preferred VCF is optional, check if this is present and build path to input VCF and vcf file name as required
-if [[ -z $preferred_VCF_path ]]
-then 
-	# could be gzipped or not and be bedfiltered or not - remove any extensions (.vcf.gz or .vcf)
-	test_vcf_name=$(echo $backup_VCF_name |  sed 's/.vcf//' | sed 's/.gz//')
-	test_vcf_path=$backup_VCF_path
-else
-	# could be gzipped or not and be bedfiltered or not - remove any extensions (.vcf.gz or .vcf)
-	test_vcf_name=$(echo $preferred_VCF_name | sed 's/.vcf//' | sed 's/.gz//')
-	test_vcf_path=$preferred_VCF_path
+mkdir -p runfolder out/bcl2fastq2_output/demultiplexing out/stats_json/demultiplexing out/fastqs/fastqs
+
+cd runfolder
+dx download -f -r $project_to_demultiplex:/$folder_to_download/ --auth $API_KEY 
+rm $folder_to_download/Data/Intensities/BaseCalls/*fastq*
+dx download "$samplesheet"
+cd ..
+
+demux_args="--no-lane-splitting"
+if [ -n "$demultiplex_args" ]; then
+	demux_args="${demux_args} ${demultiplex_args}"
 fi
+docker run -v /home/dnanexus/runfolder:/mnt/run $docker_image -R /mnt/run/$folder_to_download/ --sample-sheet /mnt/run/$samplesheet_name $demux_args  2>&1 | tee /home/dnanexus/out/bcl2fastq2_output/demultiplexing/$project_to_demultiplex.log 
 
-docker run -v /home/dnanexus:/home/dnanexus --rm ${Docker_image_name} stats $test_vcf_path > ~/out/bcftools_stats_output/QC/$test_vcf_name.stats
+mv /home/dnanexus/runfolder/$folder_to_download/Data/Intensities/BaseCalls/*fastq* /home/dnanexus/out/fastqs/fastqs/
+mv /home/dnanexus/runfolder/$folder_to_download/Data/Intensities/BaseCalls/Stats/Stats.json /home/dnanexus/out/stats_json/demultiplexing/Stats.json
 
-# Send output back to DNAnexus project
-dx-upload-all-outputs --parallel
+# Upload results
+dx-upload-all-outputs
